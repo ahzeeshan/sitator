@@ -41,7 +41,10 @@ class JumpAnalysis(object):
         time_at_current = np.ones(shape = n_mobile, dtype = np.int)
         total_time_spent_at_site = np.zeros(shape = st.site_network.n_sites, dtype = np.int)
 
+        # Use https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Welford's_Online_algorithm
+        # for computing online mean and variance
         avg_time_before_jump = np.zeros(shape = (n_sites, n_sites), dtype = np.float)
+        avg_time_before_jump_std = np.zeros_like(avg_time_before_jump)
         avg_time_before_jump_n = np.zeros(shape = avg_time_before_jump.shape, dtype = np.int)
         total_jumps_frame = np.empty(shape = n_frames, dtype = np.int)
 
@@ -80,8 +83,13 @@ class JumpAnalysis(object):
             jump_froms = last_known[jumped]
             jump_tos = frame[jumped]
 
-            avg_time_before_jump[jump_froms, jump_tos] += time_at_current[jumped]
+            # Welford's algorithm
+            welford_delta = time_at_current[jumped] - avg_time_before_jump[jump_froms, jump_tos]
             avg_time_before_jump_n[jump_froms, jump_tos] += 1
+            avg_time_before_jump[jump_froms, jump_tos] += welford_delta / avg_time_before_jump_n[jump_froms, jump_tos]
+            avg_time_before_jump_std[jump_froms, jump_tos] += \
+                welford_delta * (time_at_current[jumped] - avg_time_before_jump[jump_froms, jump_tos])
+
 
             # For all that didn't jump, increment time at current
             time_at_current[~jumped] += 1
@@ -97,13 +105,17 @@ class JumpAnalysis(object):
         if self.verbose and n_problems != 0:
             print "Came across %i times where assignment and last known assignment were unassigned." % n_problems
 
-        msk = avg_time_before_jump_n > 0
+        msk = avg_time_before_jump_n == 0
         # Zeros -- i.e. no jumps -- should actualy be infs
-        avg_time_before_jump[~msk] = np.inf
-        # Do mean
-        avg_time_before_jump[msk] /= avg_time_before_jump_n[msk]
+        avg_time_before_jump[msk] = np.inf
+        # Do Stdev
+        avg_time_before_jump_std[~msk] /= avg_time_before_jump_n[~msk]
+        np.sqrt(avg_time_before_jump_std, out = avg_time_before_jump_std)
+        avg_time_before_jump_std[msk] = np.nan
 
         st.site_network.add_edge_attribute('jump_lag', avg_time_before_jump)
+        st.site_network.add_edge_attribute('jump_lag_std', avg_time_before_jump_std)
+
         st.site_network.add_edge_attribute('n_ij', n_ij)
         st.site_network.add_edge_attribute('p_ij', n_ij / total_time_spent_at_site)
 
